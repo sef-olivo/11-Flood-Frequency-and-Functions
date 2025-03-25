@@ -49,7 +49,13 @@ Download the data for the New River at Radford.
 Then make a plot of the peak flow for each year.
 
 ```{r}
+radford <- "03171000"
 
+readNWISpeak(radford)-> peakflow 
+
+ggplot(peakflow, aes(peak_dt, peak_va))+
+  geom_point()+
+  labs(y = "Peak Flow (cfs)", x = "", title = "New River Peak Flows")
 ```
 
 As with the couple previous chapters, the next step is to create a
@@ -65,10 +71,17 @@ environment tab in rstudio or using head() to double check.
 ```{r}
 #create rank column (minus flips the ranking)
 #then clean it up, pull out only peak value, date, rank
-
+peakflow <- peakflow |> 
+  mutate(ranks = rank(-peak_va))|>
+  select(peak_dt, peak_va, ranks)
 
 #look at it
+peakflow|>
+ggplot(aes(peak_dt, peak_va, color = ranks))+
+  geom_point()+
+  labs(y = "Peak Flow (cfs)", x = "", title = "New River Peak Flows")
 
+head(peakflow)
 ```
 
 Now we need to calculate the exceedance probability and return period
@@ -101,13 +114,19 @@ Then make a plot with peak flow on the Y axis and Return Period on the
 X.
 
 ```{r}
-
+N <- length(peakflow$peak_dt)
 
 #calculate return period, exceedence/non-exceedence with Weibull
+peakflow <- peakflow |>
+  mutate(Tp = (N + 1)/ranks,
+         p = 1 / Tp,
+         pne = 1 - p)
 
 #Plot peak flows on y and est return period on the x
-
-
+peakflow |> 
+  ggplot(aes(Tp, peak_va)) +
+  geom_point()+
+  labs(x = "Return Period (yr)", y = "Peak Flows (cfs)")
 ```
 
 Now we need to fit these data to a distribution in order to make a
@@ -136,7 +155,13 @@ In the chunk below, calculate u and alpha by first calculating xbar
 equations for u and x.
 
 ```{r}
+xbar <- mean(peakflow$peak_va)
 
+sx <- sd(peakflow$peak_va)
+
+alpha <- (sqrt(6)*sx) / pi
+
+u <- xbar - (0.5772 * alpha)
 ```
 
 Now that we have the parameters that best represent our data as a Gumbel
@@ -158,7 +183,15 @@ calculated from the Gumbel distribution on your plot as points of
 different colors.
 
 ```{r}
+peakflow <- peakflow |> 
+  mutate(nonexc = exp(-exp(-((peak_va - u) / alpha)))) |>
+  mutate(Tp_gum = (1 / (1-nonexc)))
 
+
+peakflow |> ggplot() +
+  geom_point(aes(x = Tp_gum, y = peak_va, color = "Gumbel/Theoretical"))+
+  geom_point(aes(x = Tp, y = peak_va, color = "Estimated"))+
+  labs( y = "Annual Peak Flows", x = "Return Period")
 
 ```
 
@@ -174,7 +207,14 @@ With this plot you could look up the return period for any flood or the
 discharge level for any return period.
 
 ```{r}
+peakflow |> 
+  ggplot(aes(Tp, peak_va, color = "Estimated"))+
+  geom_point()+
+  geom_line(aes(Tp_gum, peak_va, color = "Gumbel"))+
+  labs(y = "Annual Peak Flows", x = "Return Period")+
+  scale_x_log10(limits = c(1,100)) -> peakplot
 
+peakplot
 ```
 
 This plot is showing a representation of the fitted distribution by
@@ -198,8 +238,14 @@ location? Do you see any issues with reporting this as the 1 in 100
 chance flood? What are they?
 
 ```{r}
+re_period = 100
+nep = 1 - (1/re_period)
 
+peak = u - (alpha * log(-log(nep)))
 ```
+
+**The peak flow for the 100 year flood is 157,455.36 cfs. In reality
+there could be variability in the exact peak flow.**
 
 The gumbel distribution fit for the New River at Radford isn't great.
 Fortunately there are ways to find an appropriate fit.
@@ -239,7 +285,14 @@ Based on the parameters from the fit, what type of extreme value
 distribution best fits the New River data?
 
 ```{r, fig.height=8, fig.width=8}
+GEVD <- fevd(peakflow$peak_va)
 
+summary(GEVD)
+plot(GEVD)
+
+location <- GEVD$results$par[1]
+scale <- GEVD$results$par[2]
+shape <- GEVD$results$par[3]
 ```
 
 We can now calculate flow magnitudes for the non-exceedance
@@ -250,7 +303,8 @@ non-exceedance probabilities calculated earlier (the pne column in the
 peakflows data).
 
 ```{r}
-
+peakflow <- peakflow |>
+  mutate(GEVD = qevd(pne,location,scale,shape))
 ```
 
 Now add a line showing flows you just calculated to the plot we made
@@ -259,6 +313,13 @@ case?
 
 ```{r}
 #add a line to the plot above that shows the Gumbel fit
+peakflow |> 
+  ggplot(aes(Tp, peak_va, color = "Estimated"))+
+  geom_point()+
+  geom_line(aes(Tp_gum, peak_va, color = "Gumbel"))+
+  labs(y = "Annual Peak Flows", x = "Return Period")+  
+  geom_line(aes(Tp, GEVD, color = "GEVD"))+
+  scale_x_log10(limits = c(1,100))
 
 ```
 
@@ -274,8 +335,13 @@ more accurate? Why?
 
 ```{r}
 #p from above is the 
-
+qevd(p = 0.99, location, scale, shape)
 ```
+
+**The peak flow for the 100 year flood is 191,056.2 cfs compared to the
+earlier peak flow of 157,455.36 cfs. While this answer is higher it
+accounts for more variability in scale, shape, and location and
+therefore is a more accurate depiction of the watershed.**
 
 This is a good opportunity to illustrate the usefulness of writing your
 own functions. When you install packages in R, you get a bunch of
@@ -321,8 +387,7 @@ ReturnPeriod <- function(flow, u, alpha){
   TpTheoretical
 }
 
-ReturnPeriod(158349, u, alpha)
-
+ReturnPeriod(157455.36, u, alpha)
 ```
 
 ## Challenge: Create a function
@@ -332,5 +397,21 @@ id. Use the generalized extreme value distribution fit function to do
 this.
 
 ```{r}
+hunyrflood <- function(site, startDate, endDate){
 
+  GEVD <- fevd(peakflow$peak_va)
+
+  location <- GEVD$results$par[1]
+  scale <- GEVD$results$par[2]
+  shape <- GEVD$results$par[3]
+  
+  peakflow <- peakflow |>
+  mutate(GEVD = qevd(pne,location,scale,shape))
+  
+  flow = u - alpha*ln(-ln(Theoretical))
+  
+  flow
+}
+
+hunyrflood(03171000, "", "") #enter USGS gage id as site
 ```
